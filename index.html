@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>REST API Explorer — React + TypeScript</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--tx:#14181f;--mu:#667085;--bd:#e2e5ea;--ac:#0d9488;--er:#dc2626;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);color-scheme:light}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0d1117;--card:#161b22;--tx:#e6edf3;--mu:#8b949e;--bd:#2a313c;--ac:#2dd4bf;--er:#f87171;color-scheme:dark}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.5 system-ui,-apple-system,sans-serif}
+.w{max-width:900px;margin:auto;padding:20px}h1{font-size:22px;margin:0 0 4px}.mu{color:var(--mu);font-size:13px}
+.g{display:grid;grid-template-columns:1fr 1.2fr;gap:16px;margin-top:16px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:14px;min-width:0}
+button,input{font:inherit;color:var(--tx);background:var(--bg);border:1px solid var(--bd);border-radius:8px;padding:8px 12px}button{cursor:pointer}
+button.p{background:var(--ac);color:var(--bg);border-color:var(--ac);font-weight:600}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px}input[type=text]{flex:1;min-width:140px}
+.u{display:block;width:100%;text-align:left;margin-bottom:6px}.u.on{border-color:var(--ac)}
+.sk{height:44px;border-radius:8px;margin-bottom:6px;background:linear-gradient(90deg,var(--bd),var(--bg),var(--bd));background-size:200% 100%;animation:s 1.2s infinite}
+@keyframes s{to{background-position:-200% 0}}
+.err{border:1px solid var(--er);color:var(--er);border-radius:8px;padding:12px}
+.log{font:12px ui-monospace,monospace;color:var(--mu);margin-top:12px;max-height:110px;overflow:auto}
+.post{padding:8px 0;border-bottom:1px solid var(--bd)}
+@media(max-width:700px){.g{grid-template-columns:1fr}}
+</style></head><body><div id="root"></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.26.4/babel.min.js"></script>
+<script type="text/plain" id="src">
+const { useState, useEffect, useCallback } = React;
+
+// ---------- TypeScript interfaces ----------
+interface User { id: number; name: string; email: string; company: { name: string } }
+interface Post { id: number; userId: number; title: string; body: string }
+interface ApiResponse<T> { status: number; data: T }
+interface FetchState<T> { data: T | null; loading: boolean; error: string | null }
+class ApiError extends Error { constructor(public status: number, msg: string) { super(msg); } }
+
+// ---------- Mock REST layer (the sandbox blocks real network calls) ----------
+// Swap `request` for fetch('https://jsonplaceholder.typicode.com' + path) in a real app.
+const DB = {
+  users: ['Ada Lovelace','Alan Turing','Grace Hopper','Linus Torvalds','Margaret Hamilton','Dennis Ritchie'].map((name, i): User => ({
+    id: i + 1, name, email: name.split(' ')[0].toLowerCase() + '@example.com', company: { name: ['Analytical','Bletchley','Navy','Linux Fdn','NASA','Bell Labs'][i] } })),
+  posts: Array.from({ length: 18 }, (_, i): Post => ({
+    id: i + 1, userId: (i % 6) + 1, title: 'Post #' + (i + 1) + ' on ' + ['compilers','types','testing','APIs','state','caching'][i % 6],
+    body: 'Notes on building reliable software, entry ' + (i + 1) + '.' })),
+};
+let failMode = false;
+async function request<T>(path: string): Promise<ApiResponse<T>> {
+  await new Promise(r => setTimeout(r, 600 + Math.random() * 600));
+  if (failMode) throw new ApiError(500, 'Internal Server Error');
+  const m = path.match(/^\/users\/(\d+)\/posts$/);
+  if (path === '/users') return { status: 200, data: DB.users as unknown as T };
+  if (m) return { status: 200, data: DB.posts.filter(p => p.userId === +m[1]) as unknown as T };
+  throw new ApiError(404, 'Not Found: ' + path);
+}
+
+// ---------- Generic data-fetching hook ----------
+function useFetch<T>(path: string | null) {
+  const [state, setState] = useState<FetchState<T>>({ data: null, loading: !!path, error: null });
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    if (!path) return;
+    let live = true;
+    setState(s => ({ ...s, loading: true, error: null }));
+    request<T>(path)
+      .then(r => live && setState({ data: r.data, loading: false, error: null }))
+      .catch((e: ApiError) => live && setState({ data: null, loading: false, error: e.status + ' — ' + e.message }));
+    return () => { live = false; };
+  }, [path, tick]);
+  return { ...state, retry: useCallback(() => setTick(t => t + 1), []) };
+}
+
+// ---------- UI ----------
+function Skeleton({ n }: { n: number }) { return <>{Array.from({ length: n }, (_, i) => <div className="sk" key={i} />)}</>; }
+function ErrorBox({ msg, onRetry }: { msg: string; onRetry: () => void }) {
+  return <div className="err" role="alert">Request failed: {msg}<div style={{ marginTop: 8 }}><button onClick={onRetry}>Retry</button></div></div>;
+}
+
+function UserList({ selected, onSelect }: { selected: number | null; onSelect: (id: number) => void }) {
+  const { data, loading, error, retry } = useFetch<User[]>('/users');
+  const [q, setQ] = useState('');
+  if (loading) return <Skeleton n={5} />;
+  if (error) return <ErrorBox msg={error} onRetry={retry} />;
+  const list = (data ?? []).filter(u => u.name.toLowerCase().includes(q.toLowerCase()));
+  return (<>
+    <input type="text" style={{ width: '100%', marginBottom: 8 }} placeholder="Filter users…" value={q} onChange={e => setQ(e.target.value)} />
+    {list.map(u => (
+      <button key={u.id} className={'u' + (u.id === selected ? ' on' : '')} onClick={() => onSelect(u.id)}>
+        <b>{u.name}</b><div className="mu">{u.email} · {u.company.name}</div>
+      </button>))}
+    {list.length === 0 && <p className="mu">No users found.</p>}
+  </>);
+}
+
+function PostList({ userId }: { userId: number | null }) {
+  const { data, loading, error, retry } = useFetch<Post[]>(userId ? `/users/${userId}/posts` : null);
+  if (!userId) return <p className="mu">Select a user to load their posts.</p>;
+  if (loading) return <Skeleton n={3} />;
+  if (error) return <ErrorBox msg={error} onRetry={retry} />;
+  return <>{data?.map(p => <div className="post" key={p.id}><b>{p.title}</b><div className="mu">{p.body}</div></div>)}</>;
+}
+
+function App() {
+  const [sel, setSel] = useState<number | null>(null);
+  const [fail, setFail] = useState(false);
+  const [epoch, setEpoch] = useState(0);
+  const toggle = () => { failMode = !fail; setFail(!fail); setEpoch(e => e + 1); setSel(null); };
+  return (
+    <div className="w">
+      <h1>REST API Explorer</h1>
+      <div className="mu">Typed requests, loading skeletons, error handling and retry.</div>
+      <div className="row" style={{ marginTop: 12 }}>
+        <button className={fail ? 'p' : ''} onClick={toggle}>{fail ? 'Server failing — click to recover' : 'Simulate server error'}</button>
+      </div>
+      <div className="g" key={epoch}>
+        <div className="card"><b>GET /users</b><div style={{ marginTop: 10 }}><UserList selected={sel} onSelect={setSel} /></div></div>
+        <div className="card"><b>GET /users/{sel ?? ':id'}/posts</b><div style={{ marginTop: 10 }}><PostList userId={sel} /></div></div>
+      </div>
+    </div>
+  );
+}
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+<script>
+try{var out=Babel.transform(document.getElementById('src').textContent,{filename:'app.tsx',presets:[['typescript',{isTSX:true,allExtensions:true}],'react']}).code;new Function(out)()}catch(e){document.getElementById('root').textContent='Failed to load: '+e.message}
+</script></body></html>
